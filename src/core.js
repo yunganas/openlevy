@@ -14,6 +14,19 @@ const b64u = {
   enc: (s) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
   dec: (s) => decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/")))),
 };
+export const MODES = ["demo", "testnet", "live"];
+export const MODE_LABEL = { demo: "DEMO", testnet: "TESTNET", live: "LIVE" };
+export const modeOf = (l) => l.mode || (/^nwc\d+@getalby\.com$/i.test(l.payee || "") ? "demo" : "live");
+// Bitcoin network an invoice belongs to, from its BOLT11 prefix.
+export function netOf(pr) {
+  const p = String(pr || "").toLowerCase();
+  if (p.startsWith("lnbcrt")) return "regtest";
+  if (p.startsWith("lntbs")) return "signet";
+  if (p.startsWith("lntb")) return "testnet";
+  if (p.startsWith("lnbc")) return "mainnet";
+  return "unknown";
+}
+export const netOk = (mode, pr) => (mode === "testnet" ? ["signet", "testnet"] : ["mainnet"]).includes(netOf(pr));
 const clean = (s, n) => String(s ?? "").replace(/[<>]/g, "").trim().slice(0, n);
 
 export function validateLevy(l) {
@@ -33,6 +46,8 @@ export function validateLevy(l) {
       seen.add(k);
     });
   }
+  if (l.mode != null && !MODES.includes(l.mode)) e.push("Unknown mode");
+  if (l.desc != null && String(l.desc).length > 80) e.push("Class label is too long");
   if (!/^[0-9a-f]{64}$/.test(l.sk || "")) e.push("Levy key missing");
   if (!/^[0-9a-f]{64}$/.test(l.rep || "")) e.push("Rep key missing");
   return e;
@@ -42,7 +57,9 @@ export function encodeLevy(l) {
   const e = validateLevy(l);
   if (e.length) throw new Error(e.join("; "));
   const { title, amount, due, payee, roster, sk, rep } = l;
-  return b64u.enc(JSON.stringify({ v: 1, title: clean(title, 80), amount, due, payee: payee.toLowerCase(), roster: roster.map((n) => clean(n, 40)), sk, rep }));
+  const o = { v: 1, title: clean(title, 80), amount, due, payee: payee.toLowerCase(), roster: roster.map((n) => clean(n, 40)), sk, rep, mode: modeOf(l) };
+  if (l.desc) o.desc = clean(l.desc, 80);
+  return b64u.enc(JSON.stringify(o));
 }
 
 export function decodeLevy(s) {
@@ -72,12 +89,23 @@ export function receiptTemplate(l, name, pr, verify) {
 // ---------- spending entries (posted by the rep, signed with the rep's own key) ----------
 // proof is optional: the vendor's Lightning invoice plus the preimage our wallet got
 // back when paying it. A preimage that hashes to the invoice's payment hash proves it was paid.
-export function spendTemplate(l, { note, sats, pr, preimage }) {
+export const CATEGORIES = ["Printing", "Transport", "Food", "Materials", "Venue", "Gift", "Other"];
+export function spendTemplate(l, { note, sats, pr, preimage, category, vendor }) {
   const id = Math.random().toString(36).slice(2, 10);
   return {
     kind: KIND, created_at: Math.floor(Date.now() / 1000),
     tags: [["d", `${levyTag(l)}:spend:${id}`], ["t", levyTag(l)], ["type", "spend"]],
-    content: JSON.stringify({ note: clean(note, 120), sats, pr: pr || null, preimage: preimage || null }),
+    content: JSON.stringify({ note: clean(note, 120), sats, pr: pr || null, preimage: preimage || null,
+      category: CATEGORIES.includes(category) ? category : "Other", vendor: clean(vendor, 60) || null }),
+  };
+}
+
+// ---------- flags: anyone with the link can question a spend (signed with the levy key) ----------
+export function flagTemplate(l, spendId, name, reason) {
+  return {
+    kind: KIND, created_at: Math.floor(Date.now() / 1000),
+    tags: [["d", `${levyTag(l)}:flag:${spendId}:${clean(name, 40).toLowerCase()}`], ["t", levyTag(l)], ["type", "flag"]],
+    content: JSON.stringify({ spend: String(spendId).slice(0, 16), name: clean(name, 40), reason: clean(reason, 140) }),
   };
 }
 
@@ -89,6 +117,7 @@ export async function checkReceipt(l, rc, fetchFn = fetch) {
   let inv;
   try { inv = new Invoice({ pr: rc.pr }); } catch { return { ok: false, why: "bad invoice" }; }
   if (inv.satoshi !== l.amount) return { ok: false, why: "wrong amount" };
+  if (!netOk(modeOf(l), rc.pr)) return { ok: false, why: "wrong network" };
   let v;
   try { v = await fetchFn(rc.verify).then((r) => r.json()); } catch { return { ok: false, why: "provider unreachable", retry: true }; }
   if (v.status !== "OK") return { ok: false, why: "provider error", retry: true };
@@ -101,6 +130,7 @@ export async function checkReceipt(l, rc, fetchFn = fetch) {
 export function checkSpend(sp) {
   if (!sp.pr) return { proof: "claimed" };
   try {
+    if (sp.mode && !netOk(sp.mode, sp.pr)) return { proof: "mismatch", why: "invoice is on the wrong network" };
     const inv = new Invoice({ pr: sp.pr });
     if (inv.satoshi !== sp.sats) return { proof: "mismatch", why: "invoice amount differs" };
     if (sp.preimage && inv.validatePreimage(sp.preimage)) return { proof: "proven", paymentHash: inv.paymentHash };
@@ -111,12 +141,14 @@ export function checkSpend(sp) {
 // ---------- the board ----------
 export async function buildBoard(l, events, fetchFn = fetch) {
   const repPk = l.rep;
-  const pays = [], spends = [];
+  const pays = [], spends = [], flags = [];
   for (const e of [...events].sort((a, b) => a.created_at - b.created_at)) {
     const type = (e.tags.find((t) => t[0] === "type") || [])[1];
     let c; try { c = JSON.parse(e.content); } catch { continue; }
     if (type === "pay" && e.pubkey === levyPubkey(l)) pays.push({ ...c, at: e.created_at });
-    if (type === "spend" && e.pubkey === repPk && Number.isInteger(c.sats) && c.sats > 0) spends.push({ ...c, at: e.created_at });
+    const dtag = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+    if (type === "spend" && e.pubkey === repPk && Number.isInteger(c.sats) && c.sats > 0) spends.push({ ...c, id: dtag.split(":spend:")[1] || e.id.slice(0, 8), at: e.created_at });
+    if (type === "flag" && e.pubkey === levyPubkey(l) && c.spend && c.name) flags.push({ ...c, at: e.created_at });
   }
   const used = new Set(), paidBy = new Map(), pending = new Set();
   for (const rc of pays) {
@@ -127,17 +159,26 @@ export async function buildBoard(l, events, fetchFn = fetch) {
     else if (r.pending) pending.add(key);
   }
   const rosterKeys = l.roster.map((n) => n.toLowerCase());
-  const people = l.roster.map((n) => ({ name: n, state: paidBy.has(n.toLowerCase()) ? "paid" : pending.has(n.toLowerCase()) ? "pending" : "unpaid", at: paidBy.get(n.toLowerCase())?.at }));
-  for (const [k, p] of paidBy) if (!rosterKeys.includes(k)) people.push({ name: p.name, state: "paid", at: p.at, extra: true });
-  const spent = spends.map((s) => ({ ...s, ...checkSpend(s) }));
+  const people = l.roster.map((n) => { const p = paidBy.get(n.toLowerCase()); return { name: n, state: p ? "paid" : pending.has(n.toLowerCase()) ? "pending" : "unpaid", at: p?.at, ref: p?.hash.slice(0, 10) }; });
+  for (const [k, p] of paidBy) if (!rosterKeys.includes(k)) people.push({ name: p.name, state: "paid", at: p.at, ref: p.hash.slice(0, 10), extra: true });
+  const mode = modeOf(l);
+  const flagsBy = new Map();
+  for (const f of flags) { const m = flagsBy.get(f.spend) || new Map(); if (!m.has(f.name.toLowerCase())) m.set(f.name.toLowerCase(), f); flagsBy.set(f.spend, m); }
+  const spent = spends.map((s) => ({ ...s, ...checkSpend({ ...s, mode }), flags: [...(flagsBy.get(s.id)?.values() || [])] }));
   const collected = paidBy.size * l.amount;
   const out = spent.reduce((a, s) => a + s.sats, 0);
   const outProven = spent.filter((s) => s.proof === "proven").reduce((a, s) => a + s.sats, 0);
-  return { people, paidCount: paidBy.size, collected, spent, out, outProven, balance: collected - out };
+  const expected = l.roster.length * l.amount;
+  const activity = [
+    ...[...paidBy.values()].map((p) => ({ type: "pay", at: p.at, name: p.name, sats: l.amount, ref: p.hash.slice(0, 10) })),
+    ...spent.map((s) => ({ type: "spend", at: s.at, name: s.note, sats: s.sats, proof: s.proof })),
+  ].sort((a, b) => b.at - a.at);
+  return { people, paidCount: paidBy.size, collected, spent, out, outProven, balance: collected - out, expected,
+    outstanding: l.roster.filter((n) => !paidBy.has(n.toLowerCase())).length, activity, mode };
 }
 
 // ---------- invoices from a Lightning address (LUD-16 + LUD-21) ----------
-export async function requestInvoice(lnAddress, sats, comment, fetchFn = fetch) {
+export async function requestInvoice(lnAddress, sats, comment, fetchFn = fetch, mode = null) {
   const [user, domain] = lnAddress.split("@");
   if (!user || !domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain)) throw new Error("That doesn't look like a Lightning address (name@domain).");
   let res;
@@ -156,8 +197,11 @@ export async function requestInvoice(lnAddress, sats, comment, fetchFn = fetch) 
   if (r.status === "ERROR" || !r.pr) throw new Error(r.reason || "No invoice returned");
   const inv = new Invoice({ pr: r.pr });
   if (inv.satoshi !== sats) throw new Error("Provider returned the wrong amount");
+  if (mode && !netOk(mode, r.pr)) throw new Error(mode === "testnet"
+    ? `This address gives ${netOf(r.pr)} invoices, not testnet. Use a signet Lightning address, such as one from Blink's test server.`
+    : `This address gives ${netOf(r.pr)} invoices. ${MODE_LABEL[mode]} levies need a mainnet-format address.`);
   if (!r.verify) throw new Error("This payee's wallet can't confirm payments (no LUD-21). Use a Lightning address that supports it, such as Alby.");
-  return { pr: r.pr, verify: r.verify, paymentHash: inv.paymentHash };
+  return { pr: r.pr, verify: r.verify, paymentHash: inv.paymentHash, expiresAt: inv.expiryDate ? +inv.expiryDate : Date.now() + 3600e3, net: netOf(r.pr) };
 }
 
 export async function faucetWallet(balance, tries = 4) {

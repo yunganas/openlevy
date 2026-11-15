@@ -4,7 +4,16 @@
 
 Built for the [Dakar Bitcoin Hack 2026](https://dakar-bitcoin-hack-2026.devpost.com/) by BTrust.
 
-Live app: https://yunganas.github.io/openlevy/web/ (tap **Try the demo**: it uses free test wallets with fake sats, so no real money moves).
+Live app: https://yunganas.github.io/openlevy/web/
+
+## Two modes, clearly labelled
+
+| Mode | What happens | Label |
+| --- | --- | --- |
+| **Demo** | Instant click-through. Free NWC Faucet test wallets make simulated payments. No funds move. | `DEMO` badge and banner |
+| **Testnet** | Real Lightning invoices on **Bitcoin signet**, paid from a signet wallet (for example Blink switched to its test server), verified with the payee's provider (LUD-21) and the preimage. Test coins have no value. | `TESTNET` badge and banner |
+
+The mode is written into the levy link, so demo and testnet ledgers can never mix. A testnet levy only accepts signet/testnet invoices, and a demo levy rejects them (tested). Mainnet support exists in the code but is not used for judging.
 
 ![OpenLevy board](docs/board.png)
 
@@ -20,7 +29,10 @@ In Nigerian universities, class reps collect departmental dues, excursion fees a
 4. **The payment is checked, not trusted.** OpenLevy asks the payee's own Lightning provider whether the invoice is settled (LUD-21 `verify`) and checks that the returned preimage hashes to the invoice's payment hash. Only then does it post a receipt to Nostr.
 5. **Anyone with the link sees the board**: who paid, total collected, what was spent, and the balance.
 6. **Provable spending.** The rep posts each expense, signed with a rep key only they hold. If the vendor was paid by Lightning, the rep attaches the vendor's invoice and the preimage, and the entry is marked **⚡ Proven**. Cash spends show as **Claimed, no proof**, so the class can tell the difference.
-7. The rep can download the paid list as CSV.
+7. Anyone can **question an expense**. The flag shows on it for the whole class.
+8. The ledger shows expected vs collected, who still owes, filters and search, a short payment reference and time for each payment, and an activity feed.
+9. Each invoice shows its expiry, with clear states: waiting, verifying, paid, expired, failed. Nothing is marked paid until it's verified.
+10. The rep can download the paid list as CSV (formula-safe).
 
 ## How it's built
 
@@ -57,7 +69,7 @@ rep phone ── spend entry signed with rep key (+ vendor invoice & preimage) �
 - Receipts and spending notes are public on Nostr relays. Don't put sensitive info in them.
 - The payee's wallet must support LUD-21 `verify` (Alby Lightning addresses do; many others don't yet).
 - Paying a vendor in cash can't be proven; it shows as "Claimed".
-- Tested on Alby test wallets via the NWC Faucet. It has not been used with real sats or real classes yet.
+- Demo payments are simulated by the NWC Faucet. Testnet payments are real signet Lightning payments. It has not been used with real sats or real classes yet.
 - The naira estimate uses Alby's rate API and is only indicative.
 
 ## Run it
@@ -69,7 +81,11 @@ npm test        # end-to-end test on NWC Faucet test wallets + public Nostr rela
 npx serve web   # or any static server
 ```
 
-The end-to-end test creates test wallets, has two students pay by Lightning, posts receipts to Nostr, has the rep post one proven and one claimed spend, injects fake receipts and a fake spend, and checks that the board shows exactly the right paid list and totals (10 checks).
+The end-to-end test (23 checks) creates test wallets, has two students pay by Lightning, posts receipts to Nostr, has the rep post a verified and a reported spend, flags a spend, injects fake receipts, a reused payment, a foreign verify URL, an outsider's spend and a wrong-network (signet) receipt, then checks the board shows exactly the right paid list, totals and flags. It also gets a real signet invoice from Blink's staging server and confirms an unpaid one reads as pending, not paid.
+
+## Why there is no OpenLevy server
+
+Payments are verified by the rep's own wallet provider (LUD-21 `verify`) plus a preimage check done in every viewer's browser. That gives server-side verification without OpenLevy running a server: there is no database to hack, no API key to leak, and OpenLevy never holds money.
 
 ## What's next
 
