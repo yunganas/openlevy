@@ -139,7 +139,12 @@ export async function buildBoard(l, events, fetchFn = fetch) {
 // ---------- invoices from a Lightning address (LUD-16 + LUD-21) ----------
 export async function requestInvoice(lnAddress, sats, comment, fetchFn = fetch) {
   const [user, domain] = lnAddress.split("@");
-  const meta = await fetchFn(`https://${domain}/.well-known/lnurlp/${encodeURIComponent(user)}`).then((r) => r.json());
+  if (!user || !domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain)) throw new Error("That doesn't look like a Lightning address (name@domain).");
+  let res;
+  try { res = await fetchFn(`https://${domain}/.well-known/lnurlp/${encodeURIComponent(user)}`); }
+  catch { throw new Error(`Couldn't reach ${domain}. An email address is not a Lightning address. Use one from a Lightning wallet, such as Alby, or tap "Use a test address".`); }
+  if (res.status === 404) throw new Error(`${lnAddress} doesn't exist on ${domain}. Check the spelling.`);
+  const meta = await res.json().catch(() => ({}));
   if (meta.tag !== "payRequest") throw new Error("Not a Lightning address");
   const msat = sats * 1000;
   if (msat < meta.minSendable || msat > meta.maxSendable) throw new Error("Amount outside what this address accepts");

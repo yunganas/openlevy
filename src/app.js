@@ -22,7 +22,7 @@ async function nairaOf(sats) {
   try { if (naira === null) naira = (await getFiatValue({ satoshi: 100000, currency: "ngn" })) / 100000; } catch { naira = 0; }
   return naira ? Math.round(sats * naira) : null;
 }
-function toast(msg, bad) { const t = $("#toast"); t.textContent = msg; t.className = bad ? "show bad" : "show"; clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = ""), 3500); }
+function toast(msg, bad) { const t = $("#toast"); t.textContent = msg; t.className = bad ? "show bad" : "show"; clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = ""), bad ? 7000 : 3500); }
 const linkFor = (code) => `${location.origin}${location.pathname}#/l/${code}`;
 const wallet = () => store.get("nwc");
 
@@ -83,13 +83,23 @@ function createForm() {
     <label>What is it for?<input name="title" required maxlength="80" placeholder="e.g. 400L departmental dues 2026/27"></label>
     <label>Amount per student (sats)<input name="amount" type="number" min="1" max="1000000" required value="1000"><small id="ngn"></small></label>
     <label>Due date<input name="due" type="date" required></label>
-    <label>Your Lightning address (where money goes)<input name="payee" required placeholder="you@getalby.com" autocomplete="off"><small>Must support payment checks (LUD-21). Alby addresses do.</small></label>
+    <label>Your Lightning address (where money goes)<input name="payee" required placeholder="you@getalby.com" autocomplete="off"><small>Must support payment checks (LUD-21). Alby addresses do. No wallet yet? <a href="#" id="testaddr">Use a test address</a> (fake sats).</small></label>
     <label>Class list, one name per line<textarea name="roster" rows="7" placeholder="Bisi Adeyemi&#10;Tunde Okafor"></textarea><small>Names only. Don't add phone numbers or matric numbers: the paid list is public to anyone with the link.</small></label>
     <button class="btn">Create and get link</button>
   </form></section>`;
   const f = $("#f"), ngn = $("#ngn");
   const upd = async () => { const v = await nairaOf(+f.amount.value || 0); ngn.textContent = v ? `≈ ₦${fmt(v)} at today's rate` : ""; };
   f.amount.oninput = upd; upd();
+  $("#testaddr").onclick = async (ev) => {
+    ev.preventDefault(); const a = ev.target; a.textContent = "Making a test wallet…";
+    try {
+      const [payee, me] = [await D.faucetWallet(0), await D.faucetWallet(10000)];
+      f.payee.value = payee.ln;
+      store.set("nwc", { url: me.nwc, label: "Test wallet (10,000 test sats)", test: true }); document.getElementById("test").style.display = "block";
+      toast("Test address filled in. You also got a test wallet with 10,000 fake sats to pay with.");
+    } catch (e) { toast(e.message, true); }
+    a.textContent = "Use a test address";
+  };
   f.due.value = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
   f.onsubmit = async (ev) => {
     ev.preventDefault();
