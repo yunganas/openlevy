@@ -253,7 +253,10 @@ async function board(code) {
     $("#due").classList.toggle("hide", !name);
     $("#due").innerHTML = name ? `<span>Paying for <b>${esc(name)}</b></span><b>${fmt(l.amount)} sats</b>` : "";
   };
-  who.onchange = () => { other.classList.toggle("hide", who.value !== "__other"); showDue(); };
+  who.onchange = () => {
+    other.classList.toggle("hide", who.value !== "__other"); showDue();
+    if ($("#inv").innerHTML) { watchId++; clearInterval(timer); store.del("pending:" + D.levyTag(l)); $("#inv").innerHTML = ""; $("#getinv").textContent = "Get payment code"; }
+  };
   other.oninput = showDue; showDue();
   $("#getinv").onclick = () => startPay(l, who.value === "__other" ? other.value.trim() : who.value);
   $("#reload").onclick = () => refresh(l, true);
@@ -318,7 +321,17 @@ function flagSpend(l, spendId) {
 }
 
 // ---------- paying ----------
-let timer = null;
+function resetPay(l) {
+  watchId++; clearInterval(timer);
+  const tag = D.levyTag(l);
+  store.del("pending:" + tag); store.del("me:" + tag);
+  const who = $("#who"), other = $("#other"); if (!who) return;
+  who.value = ""; other.value = ""; other.classList.add("hide");
+  $("#inv").innerHTML = ""; $("#due").innerHTML = ""; $("#due").classList.add("hide");
+  const b = $("#getinv"); b.disabled = false; b.textContent = "Get payment code"; b.classList.remove("hide");
+  who.focus();
+}
+let timer = null, watchId = 0;
 async function startPay(l, name) {
   if (!name) return toast("Choose your name first", true);
   const mode = D.modeOf(l);
@@ -346,7 +359,9 @@ async function renderInvoice(l, p) {
     <a class="btn dark" href="lightning:${p.pr}">Open my wallet app</a>
     <button class="btn ghost" data-copy="${p.pr}">Copy payment code</button>
     ${canNwc ? `<button class="btn ghost" id="nwcpay">Pay with connected wallet${w.test ? " (test)" : ""}</button>` : mode === "testnet" ? "" : `<a class="muted small" href="#/wallet">Connect a wallet for one-tap pay</a>`}
-    <p id="pstate" class="status" aria-live="polite"><i class="dot"></i>Waiting for payment…</p><p class="muted tiny" id="exp"></p></div>`;
+    <p id="pstate" class="status" aria-live="polite"><i class="dot"></i>Waiting for payment…</p><p class="muted tiny" id="exp"></p>
+    <button class="btn ghost small" id="resetpay">Start over / pay for someone else</button></div>`;
+  $("#resetpay").onclick = () => resetPay(l);
   clearInterval(timer);
   const tick = () => {
     const left = p.expiresAt - Date.now(), e = $("#exp"); if (!e) return clearInterval(timer);
@@ -375,10 +390,12 @@ function setState(st, extra) {
 }
 
 async function watchPayment(l, p) {
-  const tag = D.levyTag(l);
+  const tag = D.levyTag(l), id = ++watchId;
   for (let i = 0; i < 400; i++) {
+    if (id !== watchId) return; // reset or a newer code took over
     if (Date.now() > p.expiresAt + 60000) { store.del("pending:" + tag); setState("expired"); return; }
     const r = await D.checkReceipt(l, p);
+    if (id !== watchId) return;
     if (r.ok) {
       setState("verifying");
       const ev = finalizeEvent(D.receiptTemplate(l, p.name, p.pr, p.verify), hexToBytes(l.sk));
