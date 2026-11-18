@@ -90,7 +90,7 @@ async function demo() {
 }
 function testnetDemo() {
   const repSk = D.newKey(generateSecretKey);
-  const l = { title: "Testnet: LIS 400L excursion levy", desc: "Signet test levy", amount: 210, due: new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10), payee: "test@pay.staging.blink.sv",
+  const l = { title: "Testnet: LIS 400L excursion levy", desc: "Signet test levy", amount: 500, due: new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10), payee: "test@pay.staging.blink.sv",
     roster: ["Bisi Adeyemi", "Tunde Okafor", "Aisha Bello", "Chidi Nwosu", "Kemi Alade"], sk: D.newKey(generateSecretKey), rep: D.repPubkeyOf(repSk), mode: "testnet" };
   const code = D.encodeLevy(l);
   store.set("rep:" + D.levyTag(l), repSk); remember(code, l.title, true);
@@ -178,7 +178,7 @@ function createForm() {
     else nairaOf(amt).then((v) => { ngn.textContent = v ? `≈ ₦${fmt(v)} if these were real sats (estimate)` : ""; });
     return e;
   }
-  f.oninput = check; f.onchange = (ev) => { if (ev.target.name === "mode") { hint(); f.payee.value = ""; f.amount.value = mode() === "testnet" ? 210 : 1000; } check(); };
+  f.oninput = check; f.onchange = (ev) => { if (ev.target.name === "mode") { hint(); f.payee.value = ""; f.amount.value = mode() === "testnet" ? 500 : 1000; } check(); };
   f.due.value = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
   hint(); check();
   f.onsubmit = async (ev) => {

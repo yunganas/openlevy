@@ -69,7 +69,7 @@ rep phone ── spend entry signed with rep key (+ vendor invoice & preimage) �
 - Receipts and spending notes are public on Nostr relays. Don't put sensitive info in them.
 - The payee's wallet must support LUD-21 `verify` (Alby Lightning addresses do; many others don't yet).
 - Paying a vendor in cash can't be proven; it shows as "Claimed".
-- Demo payments are simulated by the NWC Faucet. Testnet payments are real signet Lightning payments. It has not been used with real sats or real classes yet.
+- Demo payments are simulated by the NWC Faucet. Testnet payments are real signet Lightning payments. On 2026-11-16 a 500-sat invoice from Blink's staging test address was paid by the free ArkFaucet signet faucet (arkfaucet.com) and verified as settled through LUD-21, with a matching preimage. That test invoice was made by script, not through the app screen. ArkFaucet only pays 500, 1,000 or 1,500 sats, so the testnet demo levy defaults to 500 sats. It has not been used with real sats or real classes yet.
 - The naira estimate uses Alby's rate API and is only indicative.
 
 ## Run it
